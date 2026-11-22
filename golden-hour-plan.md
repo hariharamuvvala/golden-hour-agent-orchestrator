@@ -4,12 +4,12 @@
 
 **Problem:** In a medical emergency, every second counts. Dispatchers must simultaneously find the nearest available ambulance AND the nearest hospital with an open ICU bed. Manual coordination wastes the critical "golden hour."
 
-**Solution:** A multi-agent AI orchestration system where three specialized agents collaborate in real-time to automatically dispatch the optimal ambulance-to-hospital route for each incoming emergency — with zero human bottleneck.
+**Solution:** A multi-agent AI orchestration system where three specialised agents collaborate in real-time to automatically dispatch the optimal ambulance-to-hospital route for each incoming emergency — with zero human bottleneck.
 
-**Demo Format:** Auto-running simulation — mock emergencies fire automatically every few seconds. A live React dashboard shows each agent working, their decisions, and the final dispatch result accumulating in a live feed.
+**Demo Format:** Auto-running simulation — mock emergencies fire automatically every 5 seconds. A live React dashboard shows each agent working, their decisions, and the final dispatch result accumulating in a live feed. Dispatchers can also trigger a manual emergency from any location using a landmark dropdown or GPS geolocation.
 
 **Constraints:**
-- Runs 100% locally (no cloud, no API keys, no Watson)
+- Runs 100% locally (no cloud, no API keys)
 - All data is in-memory mock data
 - Python FastAPI backend + React (Vite) frontend
 - Agents are deterministic Python classes (no LLM calls)
@@ -22,51 +22,65 @@
 ### High-Level Components
 
 ```
-[ React Dashboard ]
-       |
-       | HTTP (REST + SSE for live feed)
-       |
-[ FastAPI Backend ]
-       |
-       |── [ Coordinator Agent ]
-               |
-               |── [ Dispatcher Agent ]  →  Mock Ambulance Data
-               |── [ Hospital Agent ]    →  Mock Hospital/ICU Data
+[ React Dashboard :5173 ]
+        │
+        │  SSE GET /stream          (live simulation feed)
+        │  GET /status              (ambulance + hospital state, polled every 3s)
+        │  POST /dispatch           (manual patient location input)
+        ▼
+[ FastAPI Backend :8000 ]
+        │  TrustedHostMiddleware    (localhost only)
+        │  CORSMiddleware           (port 5173 only, GET+POST)
+        │  Security headers         (nosniff, DENY, no-store)
+        │  Global exception handler (no stack trace leakage)
+        │
+        └── CoordinatorAgent
+                ├── DispatcherAgent  →  AMBULANCES[]  (10 units, Bangalore)
+                └── HospitalAgent   →  HOSPITALS[]   (6 hospitals, Bangalore)
 ```
 
 ### Agent Responsibilities
 
 | Agent | Role | Input | Output |
 |---|---|---|---|
-| **Dispatcher Agent** | Finds the nearest available ambulance to the patient location | Patient lat/lon | Ranked list of available ambulances with distance |
-| **Hospital Agent** | Finds the nearest hospital with open ICU beds | Patient lat/lon, severity | Ranked list of hospitals with ICU availability and distance |
-| **Coordinator Agent** | Receives outputs from both agents, selects the optimal ambulance+hospital pair, produces the dispatch plan | Both agent outputs | Final dispatch decision with ETA and reasoning |
+| **Dispatcher Agent** | Finds the nearest available ambulance | Patient lat/lon | Closest available `Ambulance` |
+| **Hospital Agent** | Finds the nearest hospital with open ICU beds; 20% distance bonus for trauma hospitals on critical emergencies | Patient lat/lon + severity | Best matching `Hospital` |
+| **Coordinator Agent** | Orchestrates both agents, computes ETA, assembles full `DispatchPlan` with structured reasoning string | `Emergency` model | `DispatchPlan` |
 
-### Data Flow (per emergency event)
+### Data Flow — Simulation (auto, every 5 s)
 
 ```
-1. Simulation Timer fires a new MockEmergency (location + severity)
-2. Coordinator Agent receives the emergency
-3. Coordinator calls Dispatcher Agent → returns nearest available ambulance
-4. Coordinator calls Hospital Agent   → returns nearest ICU-available hospital
-5. Coordinator computes optimal pairing and produces DispatchPlan
-6. DispatchPlan is emitted via SSE to the React dashboard
-7. Dashboard appends event to live feed + updates status grid
+1. simulation_loop() fires a random Emergency (Bangalore bounds, random severity)
+2. CoordinatorAgent.dispatch(emergency) called
+3.   → DispatcherAgent.find_nearest_ambulance(lat, lon)
+4.   → HospitalAgent.find_nearest_hospital(lat, lon, severity)
+5. DispatchPlan assembled (ETA, distances, reasoning string)
+6. Ambulance status → "dispatched"; ICU bed count decremented
+7. DispatchPlan JSON fanned out to all SSE subscriber queues
+8. Ambulance auto-resets to "available" after 30 s
 ```
 
-### Mock Data Model
+### Data Flow — Manual Dispatch (on demand)
 
-**Ambulances** (in-memory list, 10 units):
-- id, name, lat, lon, status (available | dispatched | en_route)
+```
+1. User selects landmark OR clicks "📍 My Location" (browser geolocation)
+2. Frontend POSTs { lat, lon, severity } to POST /dispatch
+3. Backend validates (WGS-84 bounds, severity enum)
+4. CoordinatorAgent.dispatch() runs — same pipeline as simulation
+5. DispatchPlan returned immediately in HTTP response
+6. Plan also fanned out to SSE subscribers (appears in live feed)
+```
 
-**Hospitals** (in-memory list, 6 hospitals):
-- id, name, lat, lon, icu_beds_available, specialties
+### Pydantic Data Models
 
-**Emergency Events** (auto-generated by simulation):
-- id, patient_lat, patient_lon, severity (critical | serious | stable), timestamp
+| Model | Fields |
+|---|---|
+| `Ambulance` | id, name, lat, lon, status (`available` \| `dispatched` \| `en_route`) |
+| `Hospital` | id, name, lat, lon, icu_beds_available, specialties |
+| `Emergency` | id, patient_lat, patient_lon, severity (`critical` \| `serious` \| `stable`), timestamp |
+| `DispatchPlan` | emergency_id, ambulance, hospital, distance_to_patient_km, distance_to_hospital_km, estimated_eta_min, reasoning, severity |
 
-**Dispatch Plan** (output):
-- emergency_id, ambulance, hospital, distance_to_patient_km, distance_to_hospital_km, estimated_eta_min, reasoning
+All string enum fields use `Literal` types — invalid values are rejected at parse time with HTTP 422.
 
 ---
 
@@ -76,31 +90,43 @@
 golden-hour-agent-orchestrator/
 │
 ├── backend/
-│   ├── main.py                  # FastAPI app, SSE endpoint, simulation loop
+│   ├── main.py                    # FastAPI app, middleware, SSE, simulation, POST /dispatch
+│   ├── models.py                  # Pydantic models with Field bounds + Literal enums
+│   ├── requirements.txt           # fastapi, uvicorn, pydantic, pytest, httpx
 │   ├── agents/
 │   │   ├── __init__.py
-│   │   ├── dispatcher_agent.py  # Dispatcher Agent class
-│   │   ├── hospital_agent.py    # Hospital Agent class
-│   │   └── coordinator_agent.py # Coordinator Agent class
+│   │   ├── dispatcher_agent.py    # DispatcherAgent — nearest available ambulance
+│   │   ├── hospital_agent.py      # HospitalAgent — nearest ICU hospital + trauma bonus
+│   │   ├── coordinator_agent.py   # CoordinatorAgent — orchestrates both, builds DispatchPlan
+│   │   └── utils.py               # haversine(lat1, lon1, lat2, lon2) → km
 │   ├── data/
-│   │   ├── ambulances.py        # Mock ambulance data
-│   │   └── hospitals.py         # Mock hospital data
-│   ├── models.py                # Pydantic models (Emergency, DispatchPlan, etc.)
-│   └── requirements.txt
+│   │   ├── ambulances.py          # 10 mock ambulances (Bangalore, BLR-01 → BLR-10)
+│   │   └── hospitals.py           # 6 mock hospitals (Manipal, Fortis, St. John's, Apollo, Narayana, Victoria)
+│   └── tests/
+│       └── test_all.py            # 31 pytest tests (utils, models, agents, API endpoints)
 │
-└── frontend/
-    ├── index.html
-    ├── package.json
-    ├── vite.config.js
-    └── src/
-        ├── main.jsx
-        ├── App.jsx
-        ├── components/
-        │   ├── LiveFeed.jsx       # Scrolling list of dispatch events
-        │   ├── StatusGrid.jsx     # Ambulance + Hospital status cards
-        │   └── AgentTrace.jsx     # Shows each agent's reasoning per event
-        └── styles/
-            └── app.css
+├── frontend/
+│   ├── index.html
+│   ├── package.json               # React 19, Vite 8, Vitest, RTL
+│   ├── vite.config.js             # jsdom test environment
+│   └── src/
+│       ├── main.jsx
+│       ├── App.jsx                # EventSource + /status polling + state management
+│       ├── components/
+│       │   ├── LiveFeed.jsx       # Scrolling dispatch feed, severity colour coding
+│       │   ├── StatusGrid.jsx     # Ambulance + hospital status cards
+│       │   ├── AgentTrace.jsx     # 3-step reasoning: Dispatcher → Hospital → Coordinator
+│       │   └── ManualDispatch.jsx # Landmark dropdown + geolocation + POST /dispatch
+│       ├── styles/
+│       │   └── app.css            # Dark theme (#0d1117), CSS grid, severity colours
+│       └── __tests__/
+│           ├── setup.js           # @testing-library/jest-dom setup
+│           └── ManualDispatch.test.jsx  # 21 Vitest + RTL tests
+│
+├── GoldenHour-Hackathon.pptx      # 7-slide pitch deck
+├── README.md
+├── start.md                       # Quick-start: 2 commands + URL
+└── golden-hour-plan.md            # This file
 ```
 
 ---
@@ -111,153 +137,137 @@ golden-hour-agent-orchestrator/
 
 ### Sub-Task 0 — Git Repository Initialization
 
-**Status:** [ ] pending
+**Status:** ✅ Done (`cf900a2`)
 
-**Intent:** Initialize a Git repository in the project root, commit the plan file, and prepare for incremental commits after each sub-task. The remote will be set once the user provides their GitHub URL.
-
-**Expected Outcomes:**
-- `git init` run in `d:\repos\golden-hour-agent-orchestrator`
-- `.gitignore` created covering Python (`__pycache__`, `.venv`, `*.pyc`) and Node (`node_modules`, `dist`)
-- Initial commit: `"chore: init repo with plan"` containing `golden-hour-plan.md` and `.gitignore`
-- Remote origin added once user provides GitHub URL
-- `git push -u origin main` succeeds
-
-**Todo List:**
-1. Run `git init` in workspace root
-2. Create `.gitignore` covering `__pycache__/`, `*.pyc`, `.venv/`, `node_modules/`, `dist/`, `.env`
-3. `git add golden-hour-plan.md .gitignore` and commit: `"chore: init repo with plan"`
-4. Prompt user to provide GitHub remote URL, then run `git remote add origin <url>`
-5. `git push -u origin main`
-
-**Relevant Context:** Each subsequent sub-task ends with a `git add . && git commit -m "<message>"` and `git push`. Commit messages follow: `feat: <subtask name>`.
+**Outcomes delivered:**
+- `git init`, `.gitignore` (Python + Node), initial commit, remote pushed to GitHub
 
 ---
 
 ### Sub-Task 1 — Backend Scaffolding + Mock Data
 
-**Status:** [ ] pending
+**Status:** ✅ Done (`86d4d28`)
 
-**Intent:** Set up the FastAPI project with mock ambulance and hospital data, Pydantic models, and a working `/health` endpoint. This is the foundation everything else builds on.
-
-**Expected Outcomes:**
-- `backend/` folder exists with `requirements.txt`, `main.py`, `models.py`
-- Mock data for 10 ambulances and 6 hospitals defined in `data/`
-- `GET /health` returns `{"status": "ok"}`
-- `uvicorn main:app --reload` starts without errors
-
-**Todo List:**
-1. Create `backend/requirements.txt` with fastapi, uvicorn, pydantic
-2. Create `backend/models.py` with Pydantic models: `Ambulance`, `Hospital`, `Emergency`, `DispatchPlan`
-3. Create `backend/data/ambulances.py` with 10 mock ambulances (names, lat/lon around a city grid, status=available)
-4. Create `backend/data/hospitals.py` with 6 mock hospitals (names, lat/lon, icu_beds_available 2-8, specialties)
-5. Create `backend/main.py` with FastAPI app and `GET /health` endpoint
-6. Add CORS middleware to allow React frontend on port 5173
-7. `git add . && git commit -m "feat: backend scaffolding and mock data" && git push`
-
-
-**Relevant Context:** All lat/lon values should be in a realistic city grid centered on **Bangalore, Karnataka, India** — center coordinates `12.9716° N, 77.5946° E`, spread ± 0.05 degrees. Use real Bangalore neighborhood names for ambulance/hospital locations: Koramangala, Whitefield, Jayanagar, Hebbal, Indiranagar, Marathahalli, HSR Layout, Electronic City, Rajajinagar, Yelahanka. Use real Bangalore hospital names: Manipal Hospital, Fortis Hospital, St. John's Medical College Hospital, Apollo Hospital, Narayana Health, Victoria Hospital.
+**Outcomes delivered:**
+- `backend/` with `requirements.txt`, `main.py`, `models.py`
+- 10 ambulances across Bangalore (BLR-01 → BLR-10)
+- 6 hospitals with ICU beds and specialties
+- `GET /health` → `{"status":"ok"}`
+- CORS for port 5173
 
 ---
 
 ### Sub-Task 2 — Agent Classes
 
-**Status:** [ ] pending
+**Status:** ✅ Done (`9df2cef`)
 
-**Intent:** Implement the three agent classes with deterministic logic. No LLM. Agents use Haversine distance formula on mock data to make decisions.
-
-**Expected Outcomes:**
-- `DispatcherAgent.find_nearest_ambulance(lat, lon)` returns the closest available ambulance
-- `HospitalAgent.find_nearest_hospital(lat, lon, severity)` returns the closest hospital with ICU beds (critical severity prefers hospitals with trauma specialty)
-- `CoordinatorAgent.dispatch(emergency)` calls both agents and returns a complete `DispatchPlan`
-- All three classes importable with no errors
-
-**Todo List:**
-1. Create `backend/agents/__init__.py`
-2. Create `backend/agents/dispatcher_agent.py` — implement `DispatcherAgent` class with `find_nearest_ambulance(lat, lon)` using Haversine distance, filters `status == available`, returns closest unit
-3. Create `backend/agents/hospital_agent.py` — implement `HospitalAgent` class with `find_nearest_hospital(lat, lon, severity)`, filters `icu_beds_available > 0`, sorts by distance, critical severity boosts trauma hospitals
-4. Create `backend/agents/coordinator_agent.py` — implement `CoordinatorAgent` class, instantiates both agents, `dispatch(emergency: Emergency) -> DispatchPlan` calls both and assembles the plan with ETA estimate (distance / 60 km/h * 60 min) and a reasoning string
-5. Add a simple Haversine helper function in `coordinator_agent.py` or a shared `utils.py`
-
-6. `git add . && git commit -m "feat: dispatcher, hospital and coordinator agents" && git push`
-
-**Relevant Context:** ETA = `(distance_km / 60) * 60` minutes (assume 60 km/h average speed). Reasoning string example: `"Ambulance BLR-03 is 1.2km away near Koramangala. Manipal Hospital has 4 ICU beds and is 3.5km away. Estimated arrival: 6 min."` City is Bangalore — use BLR prefix for ambulance IDs.
+**Outcomes delivered:**
+- `DispatcherAgent.find_nearest_ambulance(lat, lon)` — Haversine, filters available
+- `HospitalAgent.find_nearest_hospital(lat, lon, severity)` — ICU filter, 20% trauma bonus for critical
+- `CoordinatorAgent.dispatch(emergency)` — orchestrates both, ETA = total_distance / 60 km/h, structured reasoning string
+- `utils.haversine()` shared utility
 
 ---
 
 ### Sub-Task 3 — Simulation Engine + SSE Endpoint
 
-**Status:** [ ] pending
+**Status:** ✅ Done (`33a8163`)
 
-**Intent:** Add a background simulation loop that auto-generates emergencies every 5 seconds and streams dispatch results to connected clients via Server-Sent Events (SSE).
-
-**Expected Outcomes:**
-- `GET /stream` is an SSE endpoint that emits a JSON `DispatchPlan` event every ~5 seconds
-- Each event is a new randomly-generated emergency processed by the CoordinatorAgent
-- Ambulance status updates to `dispatched` after being assigned (resets to `available` after 30s)
-- Multiple browser clients can connect to `/stream` simultaneously
-
-**Todo List:**
-1. Add `asyncio` background task in `main.py` that generates a random `Emergency` every 5 seconds (random lat/lon within Bangalore city bounds: lat 12.92–13.02, lon 77.55–77.65, random severity)
-2. Use an `asyncio.Queue` to pass generated dispatch plans to SSE subscribers
-3. Implement `GET /stream` as an SSE endpoint using `StreamingResponse` with `text/event-stream` content type
-4. After dispatch, mark the assigned ambulance as `dispatched`, schedule a reset to `available` after 30 seconds using `asyncio.sleep`
-5. Add `GET /status` endpoint that returns current ambulance and hospital states (for dashboard grid polling)
-6. `git add . && git commit -m "feat: simulation engine and SSE stream endpoint" && git push`
-
-
-**Relevant Context:** FastAPI SSE pattern — use `StreamingResponse` with an `async generator` that yields `f"data: {json_string}\n\n"`. The frontend `EventSource` API connects to `/stream`.
+**Outcomes delivered:**
+- `asyncio` background loop — random `Emergency` every 5 s (Bangalore bounds)
+- Per-client `asyncio.Queue` fan-out (bounded, maxsize=20)
+- `GET /stream` — `StreamingResponse` with `text/event-stream`
+- Ambulance status flip: `dispatched` → `available` after 30 s
+- ICU bed count decremented on dispatch
+- `GET /status` — current fleet + hospital state
 
 ---
 
 ### Sub-Task 4 — React Frontend
 
-**Status:** [ ] pending
+**Status:** ✅ Done (`8e3b530`)
 
-**Intent:** Build the React dashboard that connects to the SSE stream and displays the live simulation with agent trace, dispatch feed, and status grid.
-
-**Expected Outcomes:**
-- Vite + React app starts on `localhost:5173`
-- Connects to `localhost:8000/stream` via `EventSource`
-- **LiveFeed panel:** scrolling list of dispatch events, newest on top, shows ambulance name + hospital name + ETA + severity badge
-- **StatusGrid panel:** cards for each ambulance (green=available, red=dispatched) and each hospital (shows ICU bed count)
-- **AgentTrace panel:** for the most recent event, shows Dispatcher Agent finding, Hospital Agent finding, Coordinator decision — step by step
-- UI is clean and readable (dark theme preferred for demo impact)
-
-**Todo List:**
-1. Scaffold Vite React app in `frontend/` with `npm create vite@latest`
-2. Create `src/App.jsx` — sets up `EventSource`, manages state for `events[]`, `ambulances[]`, `hospitals[]`, polls `/status` every 3 seconds
-3. Create `src/components/LiveFeed.jsx` — renders scrolling list of `DispatchPlan` events with severity color coding (critical=red, serious=orange, stable=green)
-4. Create `src/components/StatusGrid.jsx` — renders ambulance cards and hospital cards from `/status` response
-5. Create `src/components/AgentTrace.jsx` — renders the `reasoning` field of the latest event as a 3-step agent trace (Dispatcher → Hospital → Coordinator)
-6. Create `src/styles/app.css` — dark theme, card-based layout, 3-panel grid
-
-7. `git add . && git commit -m "feat: react dashboard with live feed, status grid and agent trace" && git push`
-
-**Relevant Context:** No external UI library needed — plain CSS grid is sufficient. `EventSource` is native browser API, no library needed. The `reasoning` field from the backend drives the AgentTrace component.
+**Outcomes delivered:**
+- Vite + React 19, `localhost:5173`
+- `EventSource` to `/stream` — events prepended to list (capped at 50)
+- `/status` polled every 3 s
+- `LiveFeed` — severity-coloured left border + badge
+- `StatusGrid` — 10 ambulance cards (green/red) + 6 hospital ICU counts
+- `AgentTrace` — parses `[Dispatcher]`, `[Hospital]`, `[Coordinator]` tags into 3-step trace
+- Dark theme (`#0d1117`), 2-column CSS grid
 
 ---
 
 ### Sub-Task 5 — Integration + README
 
-**Status:** [ ] pending
+**Status:** ✅ Done (`a055908`)
 
-**Intent:** Verify end-to-end flow works, add a root `README.md` with setup and run instructions for the hackathon demo.
+**Outcomes delivered:**
+- End-to-end verified: backend → frontend → SSE events in browser
+- `README.md` — full setup + architecture + API + project structure
+- `start.md` — 2-command quick-start card
 
-**Expected Outcomes:**
-- Backend and frontend start cleanly with documented commands
-- Live feed populates automatically within 5 seconds of opening the browser
-- Status grid updates as ambulances get dispatched and reset
-- `README.md` has a 1-minute setup guide
+---
 
-**Todo List:**
-1. Test full flow: start backend → start frontend → confirm events appear in browser
-2. Fix any CORS, port, or SSE connection issues
-3. Write `README.md` with: project description, architecture summary, setup commands, demo instructions
-4. Add a `start.md` quick-reference card: 2 commands to run, what URL to open
+### Sub-Task 6 — Security & Guardrails
 
-**Relevant Context:** Vite dev server proxying may be needed if CORS is an issue — add `proxy: { '/api': 'http://localhost:8000' }` to `vite.config.js` or ensure CORS middleware covers `http://localhost:5173`.
-5. `git add . && git commit -m "feat: integration verified, readme and quick-start added" && git push`
+**Status:** ✅ Done (`18f0dbe`)
 
+**Outcomes delivered:**
+- `Literal` enums on severity and status — invalid values rejected at parse time (HTTP 422)
+- `Field(ge/le)` bounds on all numeric fields (lat/lon WGS-84, ICU beds, distances)
+- `TrustedHostMiddleware` — localhost/127.0.0.1 only (DNS-rebinding protection)
+- `CORSMiddleware` — `allow_methods=["GET","POST"]` only
+- Security response headers on every reply: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Cache-Control: no-store`
+- Global exception handler — 500 with generic message, stack trace logged server-side only
+- SSE subscriber cap: `_MAX_SUBSCRIBERS = 10` → HTTP 503 when exceeded
+- Bounded per-client queue: `asyncio.Queue(maxsize=20)` — slow clients skipped, not blocked
+
+---
+
+### Sub-Task 7 — Manual Dispatch Endpoint
+
+**Status:** ✅ Done (`0ef50c3`)
+
+**Outcomes delivered:**
+- `POST /dispatch` — accepts `{ lat, lon, severity }`, validates WGS-84 bounds
+- Emergency ID prefixed `MANUAL-` to distinguish from simulation events
+- Result fanned out to SSE subscribers (appears in live feed instantly)
+- `ManualDispatch.jsx` form in dashboard
+- `dispatch-btn` colour matches severity (red/orange/green)
+
+---
+
+### Sub-Task 8 — Unit Tests
+
+**Status:** ✅ Done (`f000096`, `7e9813b`)
+
+**Outcomes delivered:**
+- **Backend** — 31 pytest tests in `backend/tests/test_all.py`:
+  - `TestHaversine` (3) — same point, known distance, symmetry
+  - `TestModelValidation` (5) — valid + invalid severity/status/lat/lon/ICU
+  - `TestDispatcherAgent` (3) — nearest, excludes dispatched, None when all dispatched
+  - `TestHospitalAgent` (3) — ICU filter, full hospitals, trauma bonus
+  - `TestCoordinatorAgent` (6) — plan, ETA, distances, reasoning tags, severity, None on no resources
+  - `TestHealthEndpoint` (2) — 200 OK, security headers
+  - `TestStatusEndpoint` (3) — 10 ambulances + 6 hospitals, field presence
+  - `TestManualDispatchEndpoint` (6) — valid, bad severity, lat/lon OOB, missing fields, 503
+- **Frontend** — 21 Vitest + RTL tests in `src/__tests__/ManualDispatch.test.jsx`:
+  - Rendering (7), landmark dropdown (3), severity dropdown (2), successful dispatch (4), errors (2), geolocation (3)
+
+---
+
+### Sub-Task 9 — Location UX (Landmark + Geolocation)
+
+**Status:** ✅ Done (`db15d76`, `36c28b9`)
+
+**Outcomes delivered:**
+- `ManualDispatch.jsx` upgraded from raw lat/lon inputs to:
+  - 14-landmark dropdown (Bangalore neighbourhoods) — no coordinates needed
+  - "Custom (enter coordinates)" option — reveals raw lat/lon fields
+  - **📍 My Location** button — `navigator.geolocation.getCurrentPosition()` with graceful fallback
+  - `step="any"`, global WGS-84 bounds — full GPS precision accepted
+- Backend `ManualDispatchRequest` widened to global WGS-84 bounds
 
 ---
 
@@ -267,17 +277,25 @@ golden-hour-agent-orchestrator/
 |---|---|---|
 | Agent logic | Deterministic Python (Haversine + rules) | No LLM = no credits, no keys, fully reliable |
 | Real-time feed | SSE (Server-Sent Events) | Simpler than WebSockets for one-way push, native browser support |
-| Frontend framework | React + Vite | Fast setup, component model suits the 3-panel layout |
+| Frontend framework | React 19 + Vite 8 | Fast setup, component model suits the multi-panel layout |
 | Data persistence | In-memory Python lists | No DB setup time, sufficient for demo |
-| Distance calculation | Haversine formula | Accurate enough for mock lat/lon, pure math |
-| Styling | Plain CSS (dark theme) | No install overhead, full control |
+| Distance calculation | Haversine formula | Accurate for mock lat/lon, pure math, no dependency |
+| Styling | Plain CSS (dark theme `#0d1117`) | No install overhead, full control, matches GitHub dark |
+| Input validation | Pydantic `Literal` + `Field` bounds | Validation at the model layer — agents never receive invalid data |
+| Security headers | Custom `@app.middleware("http")` | Standard browser hardening in one place |
+| Host trust | `TrustedHostMiddleware` | Prevents DNS-rebinding attacks in local demo context |
+| Backend testing | pytest + FastAPI `TestClient` (httpx) | Idiomatic for FastAPI; in-process, no network required |
+| Frontend testing | Vitest + React Testing Library | Native Vite integration, fast jsdom runner, RTL for behaviour-first tests |
+| Location input | Landmark dropdown + `navigator.geolocation` | Zero friction for demo (no typing), real GPS for real deployments |
 
 ---
 
 ## What This Demonstrates for Judges
 
-1. **Multi-agent architecture** — 3 agents with distinct responsibilities, coordinated by an orchestrator
-2. **AI SDLC with IBM Bob** — plan-first, review-gated, subtask-by-subtask implementation
-3. **Real-world problem** — emergency dispatch is tangible and high-stakes
-4. **Live demo** — auto-running simulation is visually compelling, no manual clicks needed
-5. **Responsible AI** — transparent agent reasoning shown in the UI, no black-box decisions
+1. **Multi-agent architecture** — 3 agents with distinct responsibilities, coordinated by an orchestrator; each agent is independently testable
+2. **AI SDLC with IBM Bob** — plan-first, review-gated, sub-task-by-sub-task; every commit traces to a spec item
+3. **Real-world problem** — emergency dispatch is tangible and high-stakes; the golden hour is a genuine medical concept
+4. **Live demo** — auto-running simulation is visually compelling, no manual clicks needed to show value
+5. **Responsible AI** — transparent agent reasoning in the UI; every dispatch decision is explained step-by-step, never a black box
+6. **Production-grade guardrails** — input validation, security headers, trusted host, subscriber cap, bounded queues, global error handler
+7. **Test coverage** — 52 automated tests (31 backend + 21 frontend) covering agents, models, API contracts, and UI behaviour
