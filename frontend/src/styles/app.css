@@ -145,3 +145,11 @@ body {
 .dispatch-btn.serious  { background: #d29922; color: #fff; }
 .dispatch-btn.stable   { background: #3fb950; color: #fff; }
 .md-error { margin-top: 8px; font-size: 12px; color: #f85149; }
+.md-geo-status { margin-top: 6px; font-size: 12px; color: #3fb950; }
+.geo-btn {
+  padding: 7px 14px; border-radius: 6px; border: 1px solid #21262d;
+  background: #161b22; color: #58a6ff; font-size: 13px; font-weight: 600;
+  cursor: pointer; align-self: flex-end;
+}
+.geo-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.geo-btn:hover:not(:disabled) { border-color: #58a6ff; }
