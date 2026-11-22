@@ -3,6 +3,7 @@ import './styles/app.css';
 import LiveFeed from './components/LiveFeed';
 import StatusGrid from './components/StatusGrid';
 import AgentTrace from './components/AgentTrace';
+import ManualDispatch from './components/ManualDispatch';
 
 const BACKEND = 'http://localhost:8000';
 
@@ -59,8 +60,10 @@ export default function App() {
       </header>
 
       <div className="dashboard">
-        {/* Live Feed — full width */}
+        {/* Manual Dispatch + Live Feed — full width */}
         <div className="panel panel-full">
+          <h2>Manual Dispatch</h2>
+          <ManualDispatch onDispatched={(plan) => setEvents((prev) => [plan, ...prev].slice(0, 50))} />
           <h2>Live Dispatch Feed</h2>
           <LiveFeed events={events} />
         </div>

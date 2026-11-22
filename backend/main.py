@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field
 
 from agents.coordinator_agent import CoordinatorAgent
 from data.ambulances import AMBULANCES
@@ -42,7 +43,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],
     allow_credentials=True,
-    allow_methods=["GET"],          # read-only API — no POST/PUT/DELETE needed
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
@@ -168,3 +169,54 @@ def status():
         "ambulances": [a.model_dump() for a in AMBULANCES],
         "hospitals":  [h.model_dump() for h in HOSPITALS],
     }
+
+
+# ---------------------------------------------------------------------------
+# Manual dispatch request model
+# ---------------------------------------------------------------------------
+class ManualDispatchRequest(BaseModel):
+    lat: float      = Field(ge=12.80, le=13.10,  description="Patient latitude  (Bangalore bounds)")
+    lon: float      = Field(ge=77.45, le=77.80,  description="Patient longitude (Bangalore bounds)")
+    severity: str   = Field(pattern="^(critical|serious|stable)$")
+
+
+@app.post("/dispatch")
+async def manual_dispatch(body: ManualDispatchRequest):
+    """Accept a real patient location and return an immediate DispatchPlan.
+    The result is also fanned out to all SSE subscribers so the dashboard
+    shows it live alongside the auto-generated events.
+    """
+    emergency = Emergency(
+        id="MANUAL-" + str(uuid.uuid4())[:6].upper(),
+        patient_lat=body.lat,
+        patient_lon=body.lon,
+        severity=body.severity,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+    )
+
+    plan = coordinator.dispatch(emergency)
+    if plan is None:
+        raise HTTPException(status_code=503, detail="No available ambulance or hospital")
+
+    # Mark ambulance as dispatched
+    for amb in AMBULANCES:
+        if amb.id == plan.ambulance.id:
+            amb.status = "dispatched"
+            asyncio.create_task(_reset_ambulance(amb.id, 30))
+            break
+
+    # Decrement ICU bed
+    for hosp in HOSPITALS:
+        if hosp.id == plan.hospital.id and hosp.icu_beds_available > 0:
+            hosp.icu_beds_available -= 1
+            break
+
+    # Fan-out to SSE subscribers so the dashboard shows it live
+    payload = "data: " + plan.model_dump_json() + "\n\n"
+    for q in list(_subscribers):
+        try:
+            q.put_nowait(payload)
+        except asyncio.QueueFull:
+            pass  # slow client — skip rather than block
+
+    return plan
