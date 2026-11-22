@@ -232,3 +232,66 @@ golden-hour-agent-orchestrator/
 3. **Try Manual Dispatch** — select "Koramangala", set severity to "Critical", hit Dispatch Now
 4. **Watch the Status Grid** — ambulance turns red immediately, resets green after 30 seconds
 5. **Try 📍 My Location** — if you're in Bangalore, your GPS coordinates dispatch a real emergency
+
+---
+
+## Production Roadmap
+
+This project is a hackathon demo. The table below maps every demo shortcut to its production equivalent.
+
+| Area | Current (Demo) | Production Path |
+|---|---|---|
+| **Data layer** | In-memory Python lists | PostgreSQL + PostGIS for spatial queries and audit history |
+| **Agent logic** | Deterministic rules + Haversine | LLM-powered reasoning via watsonx.ai for context-aware, explainable decisions |
+| **Real-time transport** | SSE, single process | WebSockets + Redis pub/sub for horizontal scaling across multiple server instances |
+| **Authentication** | None | OAuth2 / JWT — dispatcher identity, role-based access (dispatcher vs supervisor vs admin) |
+| **Ambulance location** | Static lat/lon in mock data | Live GPS feed via MQTT or WebSocket from in-vehicle devices, updated every few seconds |
+| **Hospital integration** | Mock ICU counts | HL7 FHIR API integration with real hospital systems for live bed availability |
+| **Ambulance status reset** | Fixed 30 s timer | GPS-based geofencing — reset when ambulance arrives at hospital and departs |
+| **Deployment** | Local only (`localhost`) | Docker Compose for local dev → Kubernetes on IBM Cloud for production |
+| **Observability** | `logging.exception()` | OpenTelemetry distributed traces — one trace per emergency, spans per agent call |
+| **Traffic & routing** | Straight-line Haversine | Routing engine (OSRM / Google Maps API) with real-time congestion weighting |
+| **Testing** | 52 unit tests | CI/CD pipeline (GitHub Actions) — tests run on every push, deploy on green |
+| **Multi-tenancy** | Single city | City-scoped tenants — each city gets isolated ambulance + hospital data |
+
+---
+
+## Future Agent Directions
+
+The current 3-agent architecture is designed to be extended. Each new agent plugs into the Coordinator without changing existing agents.
+
+| Proposed Agent | Responsibility |
+|---|---|
+| **TrafficAgent** | Queries real-time congestion API; penalises routes through high-traffic corridors to give a more accurate ETA |
+| **SpecialtyMatchAgent** | Matches patient symptoms (from intake form) to hospital specialties beyond just trauma — e.g. cardiology, neurology, burns |
+| **ResourcePredictorAgent** | Forecasts ICU availability in the next 30 minutes based on current admission trends — prevents dispatching to a hospital about to run out of beds |
+| **NotificationAgent** | Fires alerts on dispatch: hospital receiving team, patient family SMS, dispatcher supervisor dashboard |
+| **TriageAgent** | AI-assisted initial triage — classifies severity from free-text symptom description using an NLP model |
+| **FleetOptimizerAgent** | Proactively repositions idle ambulances across the city based on historical incident heat maps to minimise future response times |
+
+### Extended Architecture (future state)
+
+```
+[ React Dashboard ]  ←──  [ Mobile App (Dispatcher) ]
+        │
+        ▼
+[ API Gateway + Auth ]
+        │
+[ Event Bus (Redis / Kafka) ]
+        │
+        ├── CoordinatorAgent
+        │       ├── DispatcherAgent
+        │       ├── HospitalAgent
+        │       ├── TrafficAgent          ← new
+        │       ├── SpecialtyMatchAgent   ← new
+        │       └── ResourcePredictorAgent← new
+        │
+        ├── NotificationAgent             ← new (event-driven)
+        └── FleetOptimizerAgent           ← new (scheduled)
+              │
+        [ PostgreSQL + PostGIS ]
+        [ HL7 FHIR Hospital APIs ]
+        [ GPS Device Fleet ]
+        [ watsonx.ai (LLM reasoning) ]
+```
+
