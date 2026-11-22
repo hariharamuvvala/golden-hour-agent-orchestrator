@@ -70,6 +70,9 @@ describe('ManualDispatch — landmark dropdown', () => {
     await userEvent.selectOptions(screen.getByLabelText(/location/i), 'Custom (enter coordinates)');
     expect(screen.getByLabelText(/latitude/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/longitude/i)).toBeInTheDocument();
+    // accepts full WGS-84 precision
+    expect(screen.getByLabelText(/latitude/i)).toHaveAttribute('step', 'any');
+    expect(screen.getByLabelText(/longitude/i)).toHaveAttribute('step', 'any');
   });
 
   it('hides lat/lon inputs when switching back to a landmark', async () => {

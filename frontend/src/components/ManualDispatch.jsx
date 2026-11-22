@@ -115,14 +115,14 @@ export default function ManualDispatch({ onDispatched }) {
             <label>
               Latitude
               <input
-                type="number" step="0.0001" min="12.80" max="13.10"
+                type="number" step="any" min="-90" max="90"
                 value={lat} onChange={e => setLat(e.target.value)} required
               />
             </label>
             <label>
               Longitude
               <input
-                type="number" step="0.0001" min="77.45" max="77.80"
+                type="number" step="any" min="-180" max="180"
                 value={lon} onChange={e => setLon(e.target.value)} required
               />
             </label>

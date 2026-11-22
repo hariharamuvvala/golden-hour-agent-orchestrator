@@ -307,14 +307,16 @@ class TestManualDispatchEndpoint:
         assert r.status_code == 422
 
     def test_lat_out_of_bounds_rejected(self, client):
+        # lat > 90 is invalid WGS-84
         r = client.post("/dispatch", json={
-            "lat": 99.0, "lon": 77.59, "severity": "stable"
+            "lat": 91.0, "lon": 77.59, "severity": "stable"
         })
         assert r.status_code == 422
 
     def test_lon_out_of_bounds_rejected(self, client):
+        # lon > 180 is invalid WGS-84
         r = client.post("/dispatch", json={
-            "lat": 12.97, "lon": 10.0, "severity": "stable"
+            "lat": 12.97, "lon": 181.0, "severity": "stable"
         })
         assert r.status_code == 422
 

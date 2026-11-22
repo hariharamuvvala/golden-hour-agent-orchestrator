@@ -175,8 +175,8 @@ def status():
 # Manual dispatch request model
 # ---------------------------------------------------------------------------
 class ManualDispatchRequest(BaseModel):
-    lat: float      = Field(ge=12.80, le=13.10,  description="Patient latitude  (Bangalore bounds)")
-    lon: float      = Field(ge=77.45, le=77.80,  description="Patient longitude (Bangalore bounds)")
+    lat: float      = Field(ge=-90.0,  le=90.0,  description="Patient latitude")
+    lon: float      = Field(ge=-180.0, le=180.0, description="Patient longitude")
     severity: str   = Field(pattern="^(critical|serious|stable)$")
 
 
