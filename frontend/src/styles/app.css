@@ -1,0 +1,121 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #0d1117;
+  color: #e6edf3;
+  font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  min-height: 100vh;
+}
+
+#root { padding: 16px; }
+
+/* ── Header ── */
+.header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid #21262d;
+  padding-bottom: 14px;
+}
+.header h1 { font-size: 20px; font-weight: 700; color: #f0f6fc; }
+.header .pulse {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: #3fb950;
+  animation: pulse 1.4s infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.5; transform: scale(1.3); }
+}
+
+/* ── 3-panel grid ── */
+.dashboard {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto auto;
+  gap: 16px;
+}
+.panel {
+  background: #161b22;
+  border: 1px solid #21262d;
+  border-radius: 8px;
+  padding: 14px;
+}
+.panel h2 {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #8b949e;
+  margin-bottom: 12px;
+}
+.panel-full { grid-column: 1 / -1; }
+
+/* ── Live Feed ── */
+.feed-list { display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto; }
+.feed-item {
+  background: #0d1117;
+  border: 1px solid #21262d;
+  border-left: 3px solid;
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+.feed-item.critical  { border-left-color: #f85149; }
+.feed-item.serious   { border-left-color: #d29922; }
+.feed-item.stable    { border-left-color: #3fb950; }
+
+.feed-item .top-row  { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+.feed-item .amb-hosp { font-weight: 600; font-size: 13px; color: #f0f6fc; }
+.feed-item .eta      { font-size: 12px; color: #8b949e; }
+.badge {
+  font-size: 11px; font-weight: 700; padding: 2px 7px;
+  border-radius: 10px; text-transform: uppercase; letter-spacing: 0.04em;
+}
+.badge.critical { background: #3d1a1a; color: #f85149; }
+.badge.serious  { background: #2d2008; color: #d29922; }
+.badge.stable   { background: #0d2a16; color: #3fb950; }
+
+.feed-item .reasoning { font-size: 12px; color: #8b949e; margin-top: 4px; }
+
+/* ── Status Grid ── */
+.status-section-title { font-size: 12px; color: #8b949e; margin: 10px 0 6px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+.card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+
+.amb-card, .hosp-card {
+  background: #0d1117;
+  border: 1px solid #21262d;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.amb-card .card-name, .hosp-card .card-name {
+  font-size: 12px; font-weight: 600; color: #f0f6fc; margin-bottom: 3px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.amb-card .card-status {
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+}
+.amb-card.available .card-status { color: #3fb950; }
+.amb-card.dispatched .card-status { color: #f85149; }
+.amb-card.en_route .card-status  { color: #d29922; }
+
+.hosp-card .icu { font-size: 12px; }
+.hosp-card .icu span { font-weight: 700; color: #58a6ff; }
+
+/* ── Agent Trace ── */
+.trace-steps { display: flex; flex-direction: column; gap: 10px; }
+.trace-step { display: flex; gap: 10px; align-items: flex-start; }
+.trace-icon {
+  width: 28px; height: 28px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 700; flex-shrink: 0;
+}
+.trace-icon.dispatcher { background: #1f3d5c; color: #58a6ff; }
+.trace-icon.hospital   { background: #1a3d2b; color: #3fb950; }
+.trace-icon.coordinator{ background: #3d2b1a; color: #d29922; }
+.trace-body .trace-label { font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; }
+.trace-body .trace-text  { font-size: 13px; color: #e6edf3; }
+
+.empty-state { color: #8b949e; font-size: 13px; padding: 10px 0; }
