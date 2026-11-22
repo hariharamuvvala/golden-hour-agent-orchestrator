@@ -5,33 +5,73 @@ import os
 sys.path.insert(0, os.path.dirname(__file__))
 
 import asyncio
-import json
+import logging
 import random
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from agents.coordinator_agent import CoordinatorAgent
 from data.ambulances import AMBULANCES
 from data.hospitals import HOSPITALS
 from models import Emergency
 
-app = FastAPI(title="Golden Hour Agent Orchestrator")
+logger = logging.getLogger("golden_hour")
+
+app = FastAPI(
+    title="Golden Hour Agent Orchestrator",
+    docs_url=None,      # disable Swagger UI in production
+    redoc_url=None,
+)
+
+# ---------------------------------------------------------------------------
+# Middleware
+# ---------------------------------------------------------------------------
+
+# Only accept requests from localhost (guards against DNS-rebinding)
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=["localhost", "127.0.0.1"],
+)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET"],          # read-only API — no POST/PUT/DELETE needed
     allow_headers=["*"],
 )
 
+
 # ---------------------------------------------------------------------------
-# SSE subscriber registry — each connected client gets its own asyncio.Queue
+# Security response headers on every reply
 # ---------------------------------------------------------------------------
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"]        = "DENY"
+    response.headers["Cache-Control"]          = "no-store"
+    return response
+
+
+# ---------------------------------------------------------------------------
+# Global exception handler — never leak stack traces to the client
+# ---------------------------------------------------------------------------
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled error on %s", request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+
+# ---------------------------------------------------------------------------
+# SSE subscriber registry — capped to prevent resource exhaustion
+# ---------------------------------------------------------------------------
+_MAX_SUBSCRIBERS = 10
 _subscribers: list[asyncio.Queue] = []
 
 coordinator = CoordinatorAgent()
@@ -61,7 +101,6 @@ async def simulation_loop():
         for amb in AMBULANCES:
             if amb.id == plan.ambulance.id:
                 amb.status = "dispatched"
-                # Schedule reset after 30 s
                 asyncio.create_task(_reset_ambulance(amb.id, 30))
                 break
 
@@ -73,7 +112,6 @@ async def simulation_loop():
 
         payload = "data: " + plan.model_dump_json() + "\n\n"
 
-        # Fan-out to all subscribers
         for q in list(_subscribers):
             await q.put(payload)
 
@@ -102,8 +140,13 @@ def health():
 
 @app.get("/stream")
 async def stream():
-    """SSE endpoint — emits a DispatchPlan JSON event every ~5 seconds."""
-    queue: asyncio.Queue = asyncio.Queue()
+    """SSE endpoint — emits a DispatchPlan JSON event every ~5 seconds.
+    Rejects connections when the subscriber cap is reached.
+    """
+    if len(_subscribers) >= _MAX_SUBSCRIBERS:
+        raise HTTPException(status_code=503, detail="Too many concurrent stream connections")
+
+    queue: asyncio.Queue = asyncio.Queue(maxsize=20)  # bounded queue per client
     _subscribers.append(queue)
 
     async def event_generator():
@@ -112,7 +155,8 @@ async def stream():
                 payload = await queue.get()
                 yield payload
         finally:
-            _subscribers.remove(queue)
+            if queue in _subscribers:
+                _subscribers.remove(queue)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
@@ -122,5 +166,5 @@ def status():
     """Returns current ambulance and hospital states for dashboard polling."""
     return {
         "ambulances": [a.model_dump() for a in AMBULANCES],
-        "hospitals": [h.model_dump() for h in HOSPITALS],
+        "hospitals":  [h.model_dump() for h in HOSPITALS],
     }
