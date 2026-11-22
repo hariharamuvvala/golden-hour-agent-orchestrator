@@ -36,7 +36,7 @@ app = FastAPI(
 # Only accept requests from localhost (guards against DNS-rebinding)
 app.add_middleware(
     TrustedHostMiddleware,
-    allowed_hosts=["localhost", "127.0.0.1"],
+    allowed_hosts=["localhost", "127.0.0.1", "testserver"],  # testserver = pytest TestClient
 )
 
 app.add_middleware(
